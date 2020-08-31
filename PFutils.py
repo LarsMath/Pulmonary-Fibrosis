@@ -60,7 +60,7 @@ def get_train_data(files, pseudo_test_patients):
             dfnew = dfnew.assign(Weekdiff_target = week1)
             dfnew = dfnew.assign(TargetFVC = df.loc[(df.Patient == patient)&(df.Weeks == week1)]['FVC'].values[0])
             weekcombinations.append(dfnew)
-            patients.append(pd.concat(weekcombinations))
+        patients.append(pd.concat(weekcombinations))
 
     train = pd.DataFrame(pd.concat(patients))    
     train["Sex"] = (train['Sex']=="Male").astype(int)
