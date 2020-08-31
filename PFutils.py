@@ -2,12 +2,6 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 import tensorflow.keras.backend as K
-from tqdm import tqdm
-import seaborn as sns
-import wandb
-from wandb.keras import WandbCallback
-import keras
-from keras.models import Sequential
 
 
 def get_test_data(files):
@@ -86,6 +80,51 @@ def get_train_data(files, pseudo_test_patients):
             "FVC_Start_Weeks_from_start": train["Weekdiff_target"]}
     
     return train, data, labels
+
+def get_pseudo_test_data(files, pseudo_test_patients, random_seed = 42):
+    np.random.seed(random_seed)
+    
+    df = pd.read_csv(files)
+    patients = df.Patient.unique()[:pseudo_test_patients]
+
+    test_data = pd.DataFrame(columns = ["Weeks", "FVC", "Percent", "Age", "Sex", 
+                                        "Weekdiff_target", 'SmokingStatus'])
+    test_check = pd.DataFrame(columns = ["TargetFVC","Weekdiff_target","FVC"])
+
+    count = 0
+    for patient in patients:
+        init_choice = int((len(df[df.Patient == patient])-3)*np.random.rand())
+        basecase = df[df.Patient == patient].iloc[init_choice]
+        for testcase in df[df.Patient == patient].iloc[-3:].iterrows():
+            count+=1
+            test_data.loc[count, "Patient_Week"] = patient + "_" + str(testcase[1]["Weeks"])
+            test_data.loc[count, "Weekdiff_target"] = testcase[1]["Weeks"] - basecase["Weeks"]
+            test_data.loc[count, "Weeks"] = basecase["Weeks"]
+            test_data.loc[count, "FVC"] = basecase["FVC"]
+            test_data.loc[count, "Percent"] = basecase["Percent"]
+            test_data.loc[count, "Sex"] = basecase["Sex"]
+            test_data.loc[count, 'SmokingStatus'] = basecase['SmokingStatus']
+            test_data.loc[count, 'Age'] = basecase['Age']
+            test_check.loc[count, "TargetFVC"] = testcase[1]["FVC"]
+            test_check.loc[count, "Weekdiff_target"] = testcase[1]["Weeks"] - basecase["Weeks"]
+            test_check.loc[count, "FVC"] = basecase["FVC"]
+
+    test_data["Sex"] = (test_data['Sex']=="Male").astype(int)
+    test_data = pd.concat([test_data,pd.get_dummies(test_data['SmokingStatus'])],axis = 1).reset_index(drop = True)
+    test_data = test_data.drop(["SmokingStatus", "Patient_Week"],axis = 1)
+    
+    Check = ["Currently smokes", "Ex-smoker", "Never smoked"]
+
+    for col in Check:
+        if col not in test_data.columns:
+            test_data[col] = 0
+    test_data = test_data[["Weeks", "FVC", "Percent", "Age", "Sex", "Currently smokes",
+                           "Ex-smoker", "Never smoked", "Weekdiff_target"]]
+    
+    test_data = test_data.astype("Float32")
+    test_check = test_check.astype("Float32")
+    
+    return test_data, test_check
 
 def build_model(config):
     
@@ -194,16 +233,11 @@ def get_cosine_annealing_lr_callback(lr_max=1e-4, n_epochs= 10000, n_cycles= 10)
 
 def get_fold_indices(folds, train):
     
-    n_patients = len(np.unique(train.Patient))
-    patients_per_fold = n_patients//folds
-    remainder = n_patients % folds
     fold_pos = [0]
-
     count = 0
     for i in np.unique(train["Patient"]):
         count += 1
-        if count == patients_per_fold:
-            count = 0
+        if count >= (len(fold_pos)*len(np.unique(train.Patient))/folds):
             fold_pos.append(np.max(np.where(train["Patient"] == i))+1)
             
     return fold_pos
