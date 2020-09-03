@@ -6,7 +6,7 @@ import tensorflow.keras.backend as K
 
 def get_test_data(files):
     test = pd.read_csv(files)
-    submission = pd.DataFrame( columns=['Patient_Week', 'FVC', 'Confidence'])
+    submission = pd.DataFrame(columns=['Patient_Week', 'FVC', 'Confidence'])
 
     count = 0
     #Submission File
@@ -49,7 +49,7 @@ def get_test_data(files):
     
     return test_data, submission
 
-def get_train_data(files, pseudo_test_patients):
+def get_train_data(files, pseudo_test_patients, input_normalization):
     df = pd.read_csv(files)
     patients = []
     for patient in df.Patient.unique()[pseudo_test_patients:]:
@@ -64,8 +64,14 @@ def get_train_data(files, pseudo_test_patients):
 
     train = pd.DataFrame(pd.concat(patients))    
     train["Sex"] = (train['Sex']=="Male").astype(int)
-
     train = pd.concat([train,pd.get_dummies(train['SmokingStatus'])],axis = 1).reset_index(drop = True)
+    train = train.drop(columns=["SmokingStatus"])
+    if input_normalization:
+        for feature_name in train.columns:
+            if (feature_name != "Patient" and feature_name != "TargetFVC"):
+                max_value = train[feature_name].max()
+                min_value = train[feature_name].min()
+                train[feature_name] = (train[feature_name] - min_value) / (max_value - min_value)
     for i in range(len(train)):
         train.loc[i, "Weekdiff_target"] = train.loc[i, "Weekdiff_target"] - train.loc[i, "Weeks"]
     
@@ -131,24 +137,29 @@ def build_model(config):
     size = config["NUMBER_FEATURES"]
     actfunc = config["ACTIVATION_FUNCTION"]
     predict_slope = config["PREDICT_SLOPE"]
+    drop_out_rate = config["DROP_OUT_RATE"]
+    l2_regularization = config["L2_REGULARIZATION"]
+    output_normalization = config["OUTPUT_NORMALIZATION"]
+    hidden_layers = config["HIDDEN_LAYERS"]
+    regularization_constant = config["REGULARIZATION_CONSTANT"]
     
     if(actfunc == 'swish'):
         actfunc = tf.keras.activations.swish
 
     inp = tf.keras.layers.Input(shape=(1,size), name = "input_features")
-    
     inp2 = tf.keras.layers.Input(shape = (1,1), name = "FVC_Start_Weeks_from_start")
     
     inputs = [inp]
     outputs = []
+    x = inp
     
-    x = tf.keras.layers.Dense(100, activation=actfunc)(inp)
-    x = tf.keras.layers.Dense(75, activation=actfunc)(x)
-    x = tf.keras.layers.Dense(50, activation=actfunc)(x)
-    x = tf.keras.layers.Dense(25, activation=actfunc)(x)
-    x = tf.keras.layers.Dense(15, activation=actfunc)(x)
-    x = tf.keras.layers.Dense(10, activation=actfunc)(x)
-
+    for n_neurons in hidden_layers:
+        if l2_regularization:
+            x = tf.keras.layers.Dense(n_neurons, activation=actfunc,
+                                      kernel_regularizer = tf.keras.regularizers.l2(regularization_constant))(x)
+        else:
+            x = tf.keras.layers.Dense(n_neurons, activation=actfunc)(x)
+        x = tf.keras.layers.Dropout(drop_out_rate)(x)
     
     # output : [slope/FVC_pred, s/sigma, FVC_start, weeks_from_start]
     outputs += [tf.keras.layers.Dense(2, name = "Output_a_s")(x)]
@@ -174,14 +185,16 @@ def build_model(config):
         else:
             FVC_pred = tf.abs(y_pred[:,0])
             sigma = tf.abs(y_pred[:,1])
+            if output_normalization:
+                FVC_pred *= 5000
+                sigma *= 500
         
         ## ** Hier kan een fout komen doordat de afgeleide moeilijker te berekenen is
-        sigma_clip = tf.maximum(tf.abs(sigma), 70)
         delta = tf.abs(FVC_true - FVC_pred)
         ## **
         
         sq2 = tf.sqrt(tf.dtypes.cast(2, dtype=tf.float32))
-        loss = (delta / sigma_clip)*sq2 + tf.math.log(sigma_clip * sq2)
+        loss = (delta / sigma)*sq2 + tf.math.log(sigma * sq2)
         return K.mean(loss)
     
     def Laplace_metric(y_true, y_pred):
@@ -203,6 +216,9 @@ def build_model(config):
         else:
             FVC_pred = tf.abs(y_pred[:,0])
             sigma = tf.abs(y_pred[:,1])
+            if output_normalization:
+                FVC_pred *= 5000
+                sigma *= 500
         
         ## ** Hier kan een fout komen doordat de afgeleide moeilijker te berekenen is
         sigma_clip = tf.maximum(tf.abs(sigma), 70)
@@ -217,7 +233,7 @@ def build_model(config):
     
     opt = tf.keras.optimizers.Adam()
     model.compile(optimizer=opt, loss=Laplace_log_likelihood, metrics = [Laplace_metric])
-
+    
     return model
 
 def get_cosine_annealing_lr_callback(lr_max=1e-4, n_epochs= 10000, n_cycles= 10):
