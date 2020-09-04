@@ -187,7 +187,7 @@ def build_model(config):
         delta = tf.abs(FVC_true - FVC_pred)
         ## **
     
-        loss = delta/100
+        loss = delta
         return K.mean(loss)
 
 
