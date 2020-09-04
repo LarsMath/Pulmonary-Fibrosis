@@ -133,7 +133,6 @@ def get_pseudo_test_data(files, pseudo_test_patients, random_seed = 42):
     return test_data, test_check
 
 def build_model(config):
-    
     size = config["NUMBER_FEATURES"]
     actfunc = config["ACTIVATION_FUNCTION"]
     predict_slope = config["PREDICT_SLOPE"]
@@ -142,8 +141,9 @@ def build_model(config):
     output_normalization = config["OUTPUT_NORMALIZATION"]
     hidden_layers = config["HIDDEN_LAYERS"]
     regularization_constant = config["REGULARIZATION_CONSTANT"]
+    drop_out_layers = config["DROP_OUT_LAYERS"]
     
-    if(actfunc == 'swish'):
+    if actfunc == 'swish':
         actfunc = tf.keras.activations.swish
 
     inp = tf.keras.layers.Input(shape=(1,size), name = "input_features")
@@ -153,13 +153,14 @@ def build_model(config):
     outputs = []
     x = inp
     
-    for n_neurons in hidden_layers:
+    for j,n_neurons in enumerate(hidden_layers):
         if l2_regularization:
             x = tf.keras.layers.Dense(n_neurons, activation=actfunc,
                                       kernel_regularizer = tf.keras.regularizers.l2(regularization_constant))(x)
         else:
             x = tf.keras.layers.Dense(n_neurons, activation=actfunc)(x)
-        x = tf.keras.layers.Dropout(drop_out_rate)(x)
+        if j in drop_out_layers:
+            x = tf.keras.layers.Dropout(drop_out_rate)(x)
     
     # output : [slope/FVC_pred, s/sigma, FVC_start, weeks_from_start]
     outputs += [tf.keras.layers.Dense(2, name = "Output_a_s")(x)]
@@ -172,7 +173,7 @@ def build_model(config):
         y_pred = tf.dtypes.cast(y_pred, tf.float32)
         FVC_true = y_true[:,0]
         
-        if(predict_slope):
+        if predict_slope:
             slope = y_pred[:,0]
             s = y_pred[:,1]
 
@@ -203,7 +204,7 @@ def build_model(config):
         y_pred = tf.dtypes.cast(y_pred, tf.float32)
         FVC_true = y_true[:,0]
         
-        if(predict_slope):
+        if predict_slope:
             slope = y_pred[:,0]
             s = y_pred[:,1]
 
