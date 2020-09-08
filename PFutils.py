@@ -49,14 +49,14 @@ def get_test_data(files):
     
     return test_data, submission
 
-def get_train_data(files, pseudo_test_patients, input_normalization):
+def get_train_data(files, pseudo_test_patients, input_normalization, train_on_backward_weeks):
     df = pd.read_csv(files)
     patients = []
     for patient in df.Patient.unique()[pseudo_test_patients:]:
         weekcombinations = []
         weeks = df.loc[df.Patient == patient]['Weeks']
         for week1 in weeks:
-            dfnew = df.loc[(df.Patient == patient) & (df.Weeks != week1)]
+            dfnew = df.loc[(df.Patient == patient) & (df.Weeks != week1) & ((df.Weeks<week1) | (train_on_backward_weeks))]
             dfnew = dfnew.assign(Weekdiff_target = week1)
             dfnew = dfnew.assign(TargetFVC = df.loc[(df.Patient == patient)&(df.Weeks == week1)]['FVC'].values[0])
             weekcombinations.append(dfnew)
@@ -66,24 +66,31 @@ def get_train_data(files, pseudo_test_patients, input_normalization):
     train["Sex"] = (train['Sex']=="Male").astype(int)
     train = pd.concat([train,pd.get_dummies(train['SmokingStatus'])],axis = 1).reset_index(drop = True)
     train = train.drop(columns=["SmokingStatus"])
-    if input_normalization:
-        for feature_name in train.columns:
-            if (feature_name != "Patient" and feature_name != "TargetFVC"):
-                max_value = train[feature_name].max()
-                min_value = train[feature_name].min()
-                train[feature_name] = (train[feature_name] - min_value) / (max_value - min_value)
+        
     for i in range(len(train)):
         train.loc[i, "Weekdiff_target"] = train.loc[i, "Weekdiff_target"] - train.loc[i, "Weeks"]
     
-    labels = pd.DataFrame(train[["TargetFVC","Weekdiff_target","FVC"]])
+    non_normalized_FVC = train["FVC"]
+    non_normalized_Weekdiff = train["Weekdiff_target"]
+    non_normalized_FVC = non_normalized_FVC.astype("float32")
+    non_normalized_Weekdiff = non_normalized_Weekdiff.astype("float32")
+    
+    labels = pd.DataFrame(train[["TargetFVC","Age", "Percent"]])
     labels = labels.astype("float32")
+        
+    if input_normalization:
+        train["Age"] = train["Age"]/100
+        train["Percent"] = train["Percent"]/100
+        train["Weeks"] = train["Weeks"]/100
+        train["Weekdiff_target"] = train["Weekdiff_target"]/100
+        train["FVC"] = train["FVC"]/5000 
     
     train = train[["Weeks", "FVC", "Percent", "Age", "Sex", "Currently smokes",
                    "Ex-smoker", "Never smoked", "Weekdiff_target", "Patient"]]
 
     data = {"input_features": train[["Weeks", "FVC", "Percent", "Age", "Sex", 
                                      "Currently smokes", "Ex-smoker", "Never smoked", "Weekdiff_target"]],
-            "FVC_Start_Weeks_from_start": train["Weekdiff_target"]}
+            "slope_FVC": non_normalized_FVC, "slope_Weekdiff": non_normalized_Weekdiff}
     
     return train, data, labels
 
@@ -146,11 +153,12 @@ def build_model(config):
     if actfunc == 'swish':
         actfunc = tf.keras.activations.swish
 
-    inp = tf.keras.layers.Input(shape=(1,size), name = "input_features")
-    inp2 = tf.keras.layers.Input(shape = (1,1), name = "FVC_Start_Weeks_from_start")
+    inp = tf.keras.layers.Input(shape=(size), name = "input_features")
+    inp2 = tf.keras.layers.Input(shape=(1), name = "slope_FVC")
+    inp3 = tf.keras.layers.Input(shape=(1), name = "slope_Weekdiff")
     
-    inputs = [inp]
-    outputs = []
+    inputs = [inp,inp2,inp3]
+
     x = inp
     
     for j,n_neurons in enumerate(hidden_layers):
@@ -162,26 +170,39 @@ def build_model(config):
         if j in drop_out_layers:
             x = tf.keras.layers.Dropout(drop_out_rate)(x)
     
-    # output : [slope/FVC_pred, s/sigma, FVC_start, weeks_from_start]
-    outputs += [tf.keras.layers.Dense(2, name = "Output_a_s")(x)]
+    FVC_output = tf.keras.layers.Dense(1, name = "FVC_output")(x)
+    sigma_output = tf.keras.layers.Dense(1, name = "sigma_output")(x)
+    
+    if output_normalization:
+        FVC_output = tf.math.scalar_mul(tf.constant(50,dtype = 'float32'), FVC_output)
+        sigma_output = tf.math.scalar_mul(tf.constant(5,dtype = 'float32'), sigma_output)
+        if(not predict_slope):
+            FVC_output = tf.math.scalar_mul(tf.constant(100,dtype = 'float32'), FVC_output)
+            sigma_output = tf.math.scalar_mul(tf.constant(100,dtype = 'float32'), sigma_output)
+
+    if False:
+        FVC_output = tf.add(tf.keras.layers.multiply([FVC_output, inp2]),inp3)
+        sigma_output = tf.keras.layers.multiply([sigma_output, inp2])
+        
+    outputs = tf.keras.layers.concatenate([FVC_output,sigma_output])
     
     def absolute_delta_error(y_true, y_pred):
-        # y_pred : [slope/FVC_pred, s/sigma, FVC_start, weeks_from_start]
         y_true = tf.dtypes.cast(y_true, tf.float32)
         y_pred = tf.dtypes.cast(y_pred, tf.float32)
         FVC_true = y_true[:,0]
         
         if(predict_slope):
             slope = y_pred[:,0]
+            s = y_pred[:,1]
+
             weeks_from_start = y_true[:,1]
             FVC_start = y_true[:,2]
             
+            sigma = s * weeks_from_start
             # Kan probleem worden by ReLu omdat slope negatief wordt door minimalisering Loss
             FVC_pred = weeks_from_start * slope + FVC_start
         else:
             FVC_pred = tf.abs(y_pred[:,0])
-            if output_normalization:
-                FVC_pred *= 5000
         
         ## ** Hier kan een fout komen doordat de afgeleide moeilijker te berekenen is
         delta = tf.abs(FVC_true - FVC_pred)
@@ -192,18 +213,21 @@ def build_model(config):
 
 
     def sigma_cost(y_true, y_pred):
-        # y_pred : [slope/FVC_pred, s/sigma, FVC_start, weeks_from_start]
         y_true = tf.dtypes.cast(y_true, tf.float32)
         y_pred = tf.dtypes.cast(y_pred, tf.float32)
         
         if(predict_slope):
+            slope = y_pred[:,0]
             s = y_pred[:,1]
+
             weeks_from_start = y_true[:,1]
+            FVC_start = y_true[:,2]
+            
             sigma = s * weeks_from_start
+            # Kan probleem worden by ReLu omdat slope negatief wordt door minimalisering Loss
+            FVC_pred = weeks_from_start * slope + FVC_start
         else:
             sigma = y_pred[:,1]
-            if output_normalization:
-                sigma *= 500
         
         sigma_clip = tf.maximum(tf.abs(sigma), 70)
         
@@ -212,7 +236,6 @@ def build_model(config):
         return K.mean(loss)
     
     def delta_over_sigma(y_true, y_pred):
-        # y_pred : [slope/FVC_pred, s/sigma, FVC_start, weeks_from_start]
         y_true = tf.dtypes.cast(y_true, tf.float32)
         y_pred = tf.dtypes.cast(y_pred, tf.float32)
         FVC_true = y_true[:,0]
@@ -220,6 +243,7 @@ def build_model(config):
         if(predict_slope):
             slope = y_pred[:,0]
             s = y_pred[:,1]
+
             weeks_from_start = y_true[:,1]
             FVC_start = y_true[:,2]
             
@@ -229,9 +253,6 @@ def build_model(config):
         else:
             FVC_pred = tf.abs(y_pred[:,0])
             sigma = tf.abs(y_pred[:,1])
-            if output_normalization:
-                FVC_pred *= 5000
-                sigma *= 500
         
         ## ** Hier kan een fout komen doordat de afgeleide moeilijker te berekenen is
         sigma_clip = tf.maximum(tf.abs(sigma), 70)
@@ -244,7 +265,6 @@ def build_model(config):
         return K.mean(loss)
     
     def Laplace_log_likelihood(y_true, y_pred):
-        # y_pred : [slope/FVC_pred, s/sigma, FVC_start, weeks_from_start]
         y_true = tf.dtypes.cast(y_true, tf.float32)
         y_pred = tf.dtypes.cast(y_pred, tf.float32)
         FVC_true = y_true[:,0]
@@ -262,11 +282,9 @@ def build_model(config):
         else:
             FVC_pred = tf.abs(y_pred[:,0])
             sigma = tf.abs(y_pred[:,1])
-            if output_normalization:
-                FVC_pred *= 5000
-                sigma *= 500
         
         ## ** Hier kan een fout komen doordat de afgeleide moeilijker te berekenen is
+        sigma = tf.maximum(tf.abs(sigma), 70)
         delta = tf.abs(FVC_true - FVC_pred)
         ## **
         
@@ -275,7 +293,6 @@ def build_model(config):
         return K.mean(loss)
     
     def Laplace_metric(y_true, y_pred):
-        # y_pred : [slope/FVC_pred, s/sigma, FVC_start, weeks_from_start]
         y_true = tf.dtypes.cast(y_true, tf.float32)
         y_pred = tf.dtypes.cast(y_pred, tf.float32)
         FVC_true = y_true[:,0]
@@ -293,9 +310,6 @@ def build_model(config):
         else:
             FVC_pred = tf.abs(y_pred[:,0])
             sigma = tf.abs(y_pred[:,1])
-            if output_normalization:
-                FVC_pred *= 5000
-                sigma *= 500
         
         ## ** Hier kan een fout komen doordat de afgeleide moeilijker te berekenen is
         sigma_clip = tf.maximum(tf.abs(sigma), 70)
