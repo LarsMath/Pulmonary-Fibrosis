@@ -4,10 +4,16 @@ import tensorflow as tf
 import tensorflow.keras.backend as K
 
 
-def get_test_data(files):
+def get_test_data(files, input_normalization):
     test = pd.read_csv(files)
     submission = pd.DataFrame(columns=['Patient_Week', 'FVC', 'Confidence'])
 
+    if input_normalization:
+        test["Age"] = test["Age"]/100
+        test["Percent"] = test["Percent"]/100
+        test["Weeks"] = test["Weeks"]/100
+        test["FVC"] = test["FVC"]/5000 
+    
     count = 0
     #Submission File
     for patient in test["Patient"]:
@@ -19,13 +25,13 @@ def get_test_data(files):
 
     test_data = pd.DataFrame(columns = ["Weeks", "FVC", "Percent", "Age", "Sex", 
                                         "Weekdiff_target", 'SmokingStatus'])
-
+    
     count = 0
     for patient in test["Patient"]:
         for i in range(-12,133+1):
             count+=1
             test_data.loc[count, "Patient_Week"] = patient + "_" + str(i)
-            test_data.loc[count, "Weekdiff_target"] = i - test[test["Patient"] == patient]["Weeks"].values[0] 
+            test_data.loc[count, "Weekdiff_target"] = i/100 - test[test["Patient"] == patient]["Weeks"].values[0] 
             test_data.loc[count, "Weeks"] = test[test["Patient"] == patient]["Weeks"].values[0]
             test_data.loc[count, "FVC"] = test[test["Patient"] == patient]["FVC"].values[0]
             test_data.loc[count, "Percent"] = test[test["Patient"] == patient]["Percent"].values[0]
@@ -75,7 +81,7 @@ def get_train_data(files, pseudo_test_patients, input_normalization, train_on_ba
     non_normalized_FVC = non_normalized_FVC.astype("float32")
     non_normalized_Weekdiff = non_normalized_Weekdiff.astype("float32")
     
-    labels = pd.DataFrame(train[["TargetFVC","Age", "Percent"]])
+    labels = pd.DataFrame(train[["TargetFVC","Weekdiff_target", "FVC"]])
     labels = labels.astype("float32")
         
     if input_normalization:
@@ -94,10 +100,17 @@ def get_train_data(files, pseudo_test_patients, input_normalization, train_on_ba
     
     return train, data, labels
 
-def get_pseudo_test_data(files, pseudo_test_patients, random_seed = 42):
+def get_pseudo_test_data(files, pseudo_test_patients, input_normalization, random_seed = 42):
     np.random.seed(random_seed)
     
     df = pd.read_csv(files)
+    
+    if input_normalization:
+        df["Age"] = df["Age"]/100
+        df["Percent"] = df["Percent"]/100
+        df["Weeks"] = df["Weeks"]/100
+        df["FVC"] = df["FVC"]/5000    
+    
     patients = df.Patient.unique()[:pseudo_test_patients]
 
     test_data = pd.DataFrame(columns = ["Weeks", "FVC", "Percent", "Age", "Sex", 
@@ -118,9 +131,9 @@ def get_pseudo_test_data(files, pseudo_test_patients, random_seed = 42):
             test_data.loc[count, "Sex"] = basecase["Sex"]
             test_data.loc[count, 'SmokingStatus'] = basecase['SmokingStatus']
             test_data.loc[count, 'Age'] = basecase['Age']
-            test_check.loc[count, "TargetFVC"] = testcase[1]["FVC"]
-            test_check.loc[count, "Weekdiff_target"] = testcase[1]["Weeks"] - basecase["Weeks"]
-            test_check.loc[count, "FVC"] = basecase["FVC"]
+            test_check.loc[count, "TargetFVC"] = testcase[1]["FVC"]*5000
+            test_check.loc[count, "Weekdiff_target"] = (testcase[1]["Weeks"] - basecase["Weeks"])*100
+            test_check.loc[count, "FVC"] = basecase["FVC"]*5000
 
     test_data["Sex"] = (test_data['Sex']=="Male").astype(int)
     test_data = pd.concat([test_data,pd.get_dummies(test_data['SmokingStatus'])],axis = 1).reset_index(drop = True)
