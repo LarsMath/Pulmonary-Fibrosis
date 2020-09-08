@@ -3,6 +3,7 @@ import pandas as pd
 import tensorflow as tf
 import tensorflow.keras.backend as K
 
+SQRT2 = tf.sqrt(tf.dtypes.cast(2, dtype=tf.float32))
 
 def get_test_data(files, input_normalization):
     test = pd.read_csv(files)
@@ -189,158 +190,23 @@ def build_model(config):
     if output_normalization:
         FVC_output = tf.math.scalar_mul(tf.constant(50,dtype = 'float32'), FVC_output)
         sigma_output = tf.math.scalar_mul(tf.constant(5,dtype = 'float32'), sigma_output)
-        if(not predict_slope):
+        if not predict_slope:
             FVC_output = tf.math.scalar_mul(tf.constant(100,dtype = 'float32'), FVC_output)
             sigma_output = tf.math.scalar_mul(tf.constant(100,dtype = 'float32'), sigma_output)
 
-    if False:
+    if predict_slope:
         FVC_output = tf.add(tf.keras.layers.multiply([FVC_output, inp2]),inp3)
         sigma_output = tf.keras.layers.multiply([sigma_output, inp2])
         
     outputs = tf.keras.layers.concatenate([FVC_output,sigma_output])
-    
-    def absolute_delta_error(y_true, y_pred):
-        y_true = tf.dtypes.cast(y_true, tf.float32)
-        y_pred = tf.dtypes.cast(y_pred, tf.float32)
-        FVC_true = y_true[:,0]
-        
-        if(predict_slope):
-            slope = y_pred[:,0]
-            s = y_pred[:,1]
 
-            weeks_from_start = y_true[:,1]
-            FVC_start = y_true[:,2]
-            
-            sigma = s * weeks_from_start
-            # Kan probleem worden by ReLu omdat slope negatief wordt door minimalisering Loss
-            FVC_pred = weeks_from_start * slope + FVC_start
-        else:
-            FVC_pred = tf.abs(y_pred[:,0])
-        
-        ## ** Hier kan een fout komen doordat de afgeleide moeilijker te berekenen is
-        delta = tf.abs(FVC_true - FVC_pred)
-        ## **
-    
-        loss = delta
-        return K.mean(loss)
-
-
-    def sigma_cost(y_true, y_pred):
-        y_true = tf.dtypes.cast(y_true, tf.float32)
-        y_pred = tf.dtypes.cast(y_pred, tf.float32)
-        
-        if(predict_slope):
-            slope = y_pred[:,0]
-            s = y_pred[:,1]
-
-            weeks_from_start = y_true[:,1]
-            FVC_start = y_true[:,2]
-            
-            sigma = s * weeks_from_start
-            # Kan probleem worden by ReLu omdat slope negatief wordt door minimalisering Loss
-            FVC_pred = weeks_from_start * slope + FVC_start
-        else:
-            sigma = y_pred[:,1]
-        
-        sigma_clip = tf.maximum(tf.abs(sigma), 70)
-        
-        sq2 = tf.sqrt(tf.dtypes.cast(2, dtype=tf.float32))
-        loss = tf.math.log(sigma_clip * sq2)
-        return K.mean(loss)
-    
-    def delta_over_sigma(y_true, y_pred):
-        y_true = tf.dtypes.cast(y_true, tf.float32)
-        y_pred = tf.dtypes.cast(y_pred, tf.float32)
-        FVC_true = y_true[:,0]
-        
-        if(predict_slope):
-            slope = y_pred[:,0]
-            s = y_pred[:,1]
-
-            weeks_from_start = y_true[:,1]
-            FVC_start = y_true[:,2]
-            
-            sigma = s * weeks_from_start
-            # Kan probleem worden by ReLu omdat slope negatief wordt door minimalisering Loss
-            FVC_pred = weeks_from_start * slope + FVC_start
-        else:
-            FVC_pred = tf.abs(y_pred[:,0])
-            sigma = tf.abs(y_pred[:,1])
-        
-        ## ** Hier kan een fout komen doordat de afgeleide moeilijker te berekenen is
-        sigma_clip = tf.maximum(tf.abs(sigma), 70)
-        delta = tf.abs(FVC_true - FVC_pred)
-        delta = tf.minimum(delta, 1000)
-        ## **
-        
-        sq2 = tf.sqrt(tf.dtypes.cast(2, dtype=tf.float32))
-        loss = (delta / sigma_clip)*sq2
-        return K.mean(loss)
-    
-    def Laplace_log_likelihood(y_true, y_pred):
-        y_true = tf.dtypes.cast(y_true, tf.float32)
-        y_pred = tf.dtypes.cast(y_pred, tf.float32)
-        FVC_true = y_true[:,0]
-        
-        if predict_slope:
-            slope = y_pred[:,0]
-            s = y_pred[:,1]
-
-            weeks_from_start = y_true[:,1]
-            FVC_start = y_true[:,2]
-            
-            sigma = s * weeks_from_start
-            # Kan probleem worden by ReLu omdat slope negatief wordt door minimalisering Loss
-            FVC_pred = weeks_from_start * slope + FVC_start
-        else:
-            FVC_pred = tf.abs(y_pred[:,0])
-            sigma = tf.abs(y_pred[:,1])
-        
-        ## ** Hier kan een fout komen doordat de afgeleide moeilijker te berekenen is
-        sigma = tf.maximum(tf.abs(sigma), 70)
-        delta = tf.abs(FVC_true - FVC_pred)
-        ## **
-        
-        sq2 = tf.sqrt(tf.dtypes.cast(2, dtype=tf.float32))
-        loss = (delta / sigma)*sq2 + tf.math.log(sigma * sq2)
-        return K.mean(loss)
-    
-    def Laplace_metric(y_true, y_pred):
-        y_true = tf.dtypes.cast(y_true, tf.float32)
-        y_pred = tf.dtypes.cast(y_pred, tf.float32)
-        FVC_true = y_true[:,0]
-        
-        if predict_slope:
-            slope = y_pred[:,0]
-            s = y_pred[:,1]
-
-            weeks_from_start = y_true[:,1]
-            FVC_start = y_true[:,2]
-            
-            sigma = s * weeks_from_start
-            # Kan probleem worden by ReLu omdat slope negatief wordt door minimalisering Loss
-            FVC_pred = weeks_from_start * slope + FVC_start
-        else:
-            FVC_pred = tf.abs(y_pred[:,0])
-            sigma = tf.abs(y_pred[:,1])
-        
-        ## ** Hier kan een fout komen doordat de afgeleide moeilijker te berekenen is
-        sigma_clip = tf.maximum(tf.abs(sigma), 70)
-        delta = tf.abs(FVC_true - FVC_pred)
-        delta = tf.minimum(delta, 1000)
-        ## **
-        
-        sq2 = tf.sqrt(tf.dtypes.cast(2, dtype=tf.float32))
-        loss = (delta / sigma_clip)*sq2 + tf.math.log(sigma_clip * sq2)
-        return K.mean(loss)
-    
-    
     model = tf.keras.Model(inputs = inputs, outputs = outputs)    
     opt = tf.keras.optimizers.Adam()
     model.compile(optimizer=opt, loss=Laplace_log_likelihood,
                   metrics = [Laplace_metric, sigma_cost, delta_over_sigma, absolute_delta_error])
     
     return model
+
 
 def get_cosine_annealing_lr_callback(lr_max=1e-4, n_epochs= 10000, n_cycles= 10):
     epochs_per_cycle = np.floor(n_epochs / n_cycles)
@@ -364,3 +230,56 @@ def get_fold_indices(folds, train):
             
     return fold_pos
 
+def absolute_delta_error(y_true, y_pred):
+
+    FVC_true = y_true[:,0]
+    FVC_pred = tf.abs(y_pred[:,0])
+
+    return K.mean(tf.abs(FVC_true - FVC_pred))
+
+def sigma_cost(y_true, y_pred):
+
+    sigma_clip = tf.maximum(tf.abs(y_pred[:,1]), 70)
+
+    loss = tf.math.log(tf.maximum(tf.abs(y_pred[:,1]), 70) * SQRT2)
+
+    return K.mean(loss)
+
+def delta_over_sigma(y_true, y_pred):
+
+    FVC_true = y_true[:,0]
+    FVC_pred = tf.abs(y_pred[:,0])
+    sigma = tf.abs(y_pred[:,1])
+
+    sigma_clip = tf.maximum(tf.abs(sigma), 70)
+    delta = tf.abs(FVC_true - FVC_pred)
+    delta = tf.minimum(delta, 1000)
+
+    loss = (delta / sigma_clip)*SQRT2
+
+    return K.mean(loss)
+
+def Laplace_metric(y_true, y_pred):
+
+    FVC_true = y_true[:,0]
+    FVC_pred = tf.abs(y_pred[:,0])
+
+    sigma_clip = tf.maximum(tf.abs(y_pred[:,1]), 70)
+    delta = tf.abs(FVC_true - FVC_pred)
+    delta = tf.minimum(delta, 1000)
+
+    loss = (delta / sigma_clip)*SQRT2 + tf.math.log(sigma_clip * SQRT2)
+    return K.mean(loss)
+
+def Laplace_log_likelihood(y_true, y_pred):
+
+    FVC_true = y_true[:,0]
+    FVC_pred = tf.abs(y_pred[:,0])
+
+    ## ** Hier kan een fout komen doordat de afgeleide moeilijker te berekenen is
+    sigma = tf.maximum(tf.abs(y_pred[:,1]), 70)
+    delta = tf.abs(FVC_true - FVC_pred)
+    ## **
+
+    loss = (delta / sigma)*SQRT2 + tf.math.log(sigma * SQRT2)
+    return K.mean(loss)
