@@ -164,6 +164,7 @@ def build_model(config):
     hidden_layers = config["HIDDEN_LAYERS"]
     regularization_constant = config["REGULARIZATION_CONSTANT"]
     drop_out_layers = config["DROP_OUT_LAYERS"]
+    modified_loss = config["MODIFIED_LOSS"]
     
     if actfunc == 'swish':
         actfunc = tf.keras.activations.swish
@@ -203,8 +204,12 @@ def build_model(config):
 
     model = tf.keras.Model(inputs = inputs, outputs = outputs)    
     opt = tf.keras.optimizers.Adam()
-    model.compile(optimizer=opt, loss=Laplace_log_likelihood,
-                  metrics = [Laplace_metric, sigma_cost, delta_over_sigma, absolute_delta_error])
+    if modified_loss:
+        model.compile(optimizer=opt, loss=experimental_loss_function,
+                      metrics = [Laplace_metric, sigma_cost, delta_over_sigma, absolute_delta_error])
+    else:
+        model.compile(optimizer=opt, loss=Laplace_log_likelihood,
+                      metrics = [Laplace_metric, sigma_cost, delta_over_sigma, absolute_delta_error])
     
     return model
 
@@ -346,3 +351,17 @@ def Laplace_log_likelihood(y_true, y_pred):
 
     loss = (delta / sigma)*SQRT2 + tf.math.log(sigma * SQRT2)
     return K.mean(loss)
+
+def experimental_loss_function(y_true, y_pred):
+
+    FVC_true = y_true[:,0]
+    FVC_pred = tf.abs(y_pred[:,0])
+
+    ## ** Hier kan een fout komen doordat de afgeleide moeilijker te berekenen is
+    sigma = tf.maximum(tf.abs(y_pred[:,1]), 70)
+    delta = tf.abs(FVC_true - FVC_pred)
+    ## **
+
+    loss = (delta / 70)*SQRT2 + (delta / sigma)*SQRT2 + tf.math.log(sigma * SQRT2)
+    return K.mean(loss)
+
