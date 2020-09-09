@@ -213,12 +213,27 @@ def build_model(config):
     
     return model
 
-def get_cosine_annealing_lr_callback(lr_max=1e-4, n_epochs= 10000, n_cycles= 10):
+def get_cosine_annealing_lr_callback(config):
+    n_epochs = config["EPOCHS"]
+    lr_max = config["MAX_LEARNING_RATE"]
+    n_cycles = config["COSINE_CYCLES"]
+    
     epochs_per_cycle = np.floor(n_epochs / n_cycles)
 
     def lrfn(epoch):
         cos_inner = (np.pi * (epoch % epochs_per_cycle)) / epochs_per_cycle
         return lr_max / 2 * (np.cos(cos_inner) + 1)
+
+    lr_callback = tf.keras.callbacks.LearningRateScheduler(lrfn, verbose=False)
+    
+    return lr_callback
+
+def get_exponential_decay_lr_callback(config):
+    lr_max = config["MAX_LEARNING_RATE"]
+    decay = config["EPOCHS_PER_OOM_DECAY"]
+
+    def lrfn(epoch):
+        return lr_max * np.power(0.1,(epoch/decay))
 
     lr_callback = tf.keras.callbacks.LearningRateScheduler(lrfn, verbose=False)
     
