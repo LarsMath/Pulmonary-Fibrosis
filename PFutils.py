@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 import tensorflow.keras.backend as K
+import keras
 
 SQRT2 = tf.sqrt(tf.dtypes.cast(2, dtype=tf.float32))
 
@@ -207,6 +208,28 @@ def build_model(config):
     
     return model
 
+def get_cosine_annealing_lr_callback(lr_max=1e-4, n_epochs= 10000, n_cycles= 10):
+    epochs_per_cycle = np.floor(n_epochs / n_cycles)
+
+    def lrfn(epoch):
+        cos_inner = (np.pi * (epoch % epochs_per_cycle)) / epochs_per_cycle
+        return lr_max / 2 * (np.cos(cos_inner) + 1)
+
+    lr_callback = tf.keras.callbacks.LearningRateScheduler(lrfn, verbose=False)
+    
+    return lr_callback
+
+def get_fold_indices(folds, train):
+    
+    fold_pos = [0]
+    count = 0
+    for i in np.unique(train["Patient"]):
+        count += 1
+        if count >= (len(fold_pos)*len(np.unique(train.Patient))/folds):
+            fold_pos.append(np.max(np.where(train["Patient"] == i))+1)
+            
+    return fold_pos
+
 class DataGenerator(keras.utils.Sequence):
     def __init__(self, list_IDs, config, validation = False, number_of_labels = 3,
                  batch_size = 128, shuffle = True):
@@ -270,28 +293,6 @@ class DataGenerator(keras.utils.Sequence):
             y[:,0] += gauss_y.astype("float32")
         
         return X, y
-
-def get_cosine_annealing_lr_callback(lr_max=1e-4, n_epochs= 10000, n_cycles= 10):
-    epochs_per_cycle = np.floor(n_epochs / n_cycles)
-
-    def lrfn(epoch):
-        cos_inner = (np.pi * (epoch % epochs_per_cycle)) / epochs_per_cycle
-        return lr_max / 2 * (np.cos(cos_inner) + 1)
-
-    lr_callback = tf.keras.callbacks.LearningRateScheduler(lrfn, verbose=False)
-    
-    return lr_callback
-
-def get_fold_indices(folds, train):
-    
-    fold_pos = [0]
-    count = 0
-    for i in np.unique(train["Patient"]):
-        count += 1
-        if count >= (len(fold_pos)*len(np.unique(train.Patient))/folds):
-            fold_pos.append(np.max(np.where(train["Patient"] == i))+1)
-            
-    return fold_pos
 
 def absolute_delta_error(y_true, y_pred):
 
