@@ -2,12 +2,20 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 import tensorflow.keras.backend as K
+import keras
 
+SQRT2 = tf.sqrt(tf.dtypes.cast(2, dtype=tf.float32))
 
-def get_test_data(files):
+def get_test_data(files, input_normalization):
     test = pd.read_csv(files)
     submission = pd.DataFrame(columns=['Patient_Week', 'FVC', 'Confidence'])
 
+    if input_normalization:
+        test["Age"] = test["Age"]/100
+        test["Percent"] = test["Percent"]/100
+        test["Weeks"] = test["Weeks"]/100
+        test["FVC"] = test["FVC"]/5000 
+    
     count = 0
     #Submission File
     for patient in test["Patient"]:
@@ -19,13 +27,13 @@ def get_test_data(files):
 
     test_data = pd.DataFrame(columns = ["Weeks", "FVC", "Percent", "Age", "Sex", 
                                         "Weekdiff_target", 'SmokingStatus'])
-
+    
     count = 0
     for patient in test["Patient"]:
         for i in range(-12,133+1):
             count+=1
             test_data.loc[count, "Patient_Week"] = patient + "_" + str(i)
-            test_data.loc[count, "Weekdiff_target"] = i - test[test["Patient"] == patient]["Weeks"].values[0] 
+            test_data.loc[count, "Weekdiff_target"] = i/100 - test[test["Patient"] == patient]["Weeks"].values[0] 
             test_data.loc[count, "Weeks"] = test[test["Patient"] == patient]["Weeks"].values[0]
             test_data.loc[count, "FVC"] = test[test["Patient"] == patient]["FVC"].values[0]
             test_data.loc[count, "Percent"] = test[test["Patient"] == patient]["Percent"].values[0]
@@ -49,14 +57,14 @@ def get_test_data(files):
     
     return test_data, submission
 
-def get_train_data(files, pseudo_test_patients, input_normalization):
+def get_train_data(files, pseudo_test_patients, input_normalization, train_on_backward_weeks):
     df = pd.read_csv(files)
     patients = []
     for patient in df.Patient.unique()[pseudo_test_patients:]:
         weekcombinations = []
         weeks = df.loc[df.Patient == patient]['Weeks']
         for week1 in weeks:
-            dfnew = df.loc[(df.Patient == patient) & (df.Weeks != week1)]
+            dfnew = df.loc[(df.Patient == patient) & (df.Weeks != week1) & ((df.Weeks<week1) | (train_on_backward_weeks))]
             dfnew = dfnew.assign(Weekdiff_target = week1)
             dfnew = dfnew.assign(TargetFVC = df.loc[(df.Patient == patient)&(df.Weeks == week1)]['FVC'].values[0])
             weekcombinations.append(dfnew)
@@ -66,31 +74,45 @@ def get_train_data(files, pseudo_test_patients, input_normalization):
     train["Sex"] = (train['Sex']=="Male").astype(int)
     train = pd.concat([train,pd.get_dummies(train['SmokingStatus'])],axis = 1).reset_index(drop = True)
     train = train.drop(columns=["SmokingStatus"])
-    if input_normalization:
-        for feature_name in train.columns:
-            if (feature_name != "Patient" and feature_name != "TargetFVC"):
-                max_value = train[feature_name].max()
-                min_value = train[feature_name].min()
-                train[feature_name] = (train[feature_name] - min_value) / (max_value - min_value)
+        
     for i in range(len(train)):
         train.loc[i, "Weekdiff_target"] = train.loc[i, "Weekdiff_target"] - train.loc[i, "Weeks"]
     
-    labels = pd.DataFrame(train[["TargetFVC","Weekdiff_target","FVC"]])
+    non_normalized_FVC = train["FVC"]
+    non_normalized_Weekdiff = train["Weekdiff_target"]
+    non_normalized_FVC = non_normalized_FVC.astype("float32")
+    non_normalized_Weekdiff = non_normalized_Weekdiff.astype("float32")
+    
+    labels = pd.DataFrame(train[["TargetFVC","Weekdiff_target", "FVC"]])
     labels = labels.astype("float32")
+        
+    if input_normalization:
+        train["Age"] = train["Age"]/100
+        train["Percent"] = train["Percent"]/100
+        train["Weeks"] = train["Weeks"]/100
+        train["Weekdiff_target"] = train["Weekdiff_target"]/100
+        train["FVC"] = train["FVC"]/5000 
     
     train = train[["Weeks", "FVC", "Percent", "Age", "Sex", "Currently smokes",
                    "Ex-smoker", "Never smoked", "Weekdiff_target", "Patient"]]
 
     data = {"input_features": train[["Weeks", "FVC", "Percent", "Age", "Sex", 
                                      "Currently smokes", "Ex-smoker", "Never smoked", "Weekdiff_target"]],
-            "FVC_Start_Weeks_from_start": train["Weekdiff_target"]}
+            "slope_FVC": non_normalized_FVC, "slope_Weekdiff": non_normalized_Weekdiff}
     
     return train, data, labels
 
-def get_pseudo_test_data(files, pseudo_test_patients, random_seed = 42):
+def get_pseudo_test_data(files, pseudo_test_patients, input_normalization, random_seed = 42):
     np.random.seed(random_seed)
     
     df = pd.read_csv(files)
+    
+    if input_normalization:
+        df["Age"] = df["Age"]/100
+        df["Percent"] = df["Percent"]/100
+        df["Weeks"] = df["Weeks"]/100
+        df["FVC"] = df["FVC"]/5000    
+    
     patients = df.Patient.unique()[:pseudo_test_patients]
 
     test_data = pd.DataFrame(columns = ["Weeks", "FVC", "Percent", "Age", "Sex", 
@@ -111,9 +133,9 @@ def get_pseudo_test_data(files, pseudo_test_patients, random_seed = 42):
             test_data.loc[count, "Sex"] = basecase["Sex"]
             test_data.loc[count, 'SmokingStatus'] = basecase['SmokingStatus']
             test_data.loc[count, 'Age'] = basecase['Age']
-            test_check.loc[count, "TargetFVC"] = testcase[1]["FVC"]
-            test_check.loc[count, "Weekdiff_target"] = testcase[1]["Weeks"] - basecase["Weeks"]
-            test_check.loc[count, "FVC"] = basecase["FVC"]
+            test_check.loc[count, "TargetFVC"] = testcase[1]["FVC"]*5000
+            test_check.loc[count, "Weekdiff_target"] = (testcase[1]["Weeks"] - basecase["Weeks"])*100
+            test_check.loc[count, "FVC"] = basecase["FVC"]*5000
 
     test_data["Sex"] = (test_data['Sex']=="Male").astype(int)
     test_data = pd.concat([test_data,pd.get_dummies(test_data['SmokingStatus'])],axis = 1).reset_index(drop = True)
@@ -142,15 +164,17 @@ def build_model(config):
     hidden_layers = config["HIDDEN_LAYERS"]
     regularization_constant = config["REGULARIZATION_CONSTANT"]
     drop_out_layers = config["DROP_OUT_LAYERS"]
+    modified_loss = config["MODIFIED_LOSS"]
     
     if actfunc == 'swish':
         actfunc = tf.keras.activations.swish
 
-    inp = tf.keras.layers.Input(shape=(1,size), name = "input_features")
-    inp2 = tf.keras.layers.Input(shape = (1,1), name = "FVC_Start_Weeks_from_start")
+    inp = tf.keras.layers.Input(shape=(size), name = "input_features")
+    inp2 = tf.keras.layers.Input(shape=(1), name = "slope_FVC")
+    inp3 = tf.keras.layers.Input(shape=(1), name = "slope_Weekdiff")
     
-    inputs = [inp]
-    outputs = []
+    inputs = [inp,inp2,inp3]
+
     x = inp
     
     for j,n_neurons in enumerate(hidden_layers):
@@ -162,156 +186,30 @@ def build_model(config):
         if j in drop_out_layers:
             x = tf.keras.layers.Dropout(drop_out_rate)(x)
     
-    # output : [slope/FVC_pred, s/sigma, FVC_start, weeks_from_start]
-    outputs += [tf.keras.layers.Dense(2, name = "Output_a_s")(x)]
+    FVC_output = tf.keras.layers.Dense(1, name = "FVC_output")(x)
+    sigma_output = tf.keras.layers.Dense(1, name = "sigma_output")(x)
     
-    def absolute_delta_error(y_true, y_pred):
-        # y_pred : [slope/FVC_pred, s/sigma, FVC_start, weeks_from_start]
-        y_true = tf.dtypes.cast(y_true, tf.float32)
-        y_pred = tf.dtypes.cast(y_pred, tf.float32)
-        FVC_true = y_true[:,0]
-        
-        if(predict_slope):
-            slope = y_pred[:,0]
-            weeks_from_start = y_true[:,1]
-            FVC_start = y_true[:,2]
-            
-            # Kan probleem worden by ReLu omdat slope negatief wordt door minimalisering Loss
-            FVC_pred = weeks_from_start * slope + FVC_start
-        else:
-            FVC_pred = tf.abs(y_pred[:,0])
-            if output_normalization:
-                FVC_pred *= 5000
-        
-        ## ** Hier kan een fout komen doordat de afgeleide moeilijker te berekenen is
-        delta = tf.abs(FVC_true - FVC_pred)
-        ## **
-    
-        loss = delta
-        return K.mean(loss)
+    if output_normalization:
+        FVC_output = tf.math.scalar_mul(tf.constant(50,dtype = 'float32'), FVC_output)
+        sigma_output = tf.math.scalar_mul(tf.constant(5,dtype = 'float32'), sigma_output)
+        if not predict_slope:
+            FVC_output = tf.math.scalar_mul(tf.constant(100,dtype = 'float32'), FVC_output)
+            sigma_output = tf.math.scalar_mul(tf.constant(100,dtype = 'float32'), sigma_output)
 
+    if predict_slope:
+        FVC_output = tf.add(tf.keras.layers.multiply([FVC_output, inp2]),inp3)
+        sigma_output = tf.keras.layers.multiply([sigma_output, inp2])
+        
+    outputs = tf.keras.layers.concatenate([FVC_output,sigma_output])
 
-    def sigma_cost(y_true, y_pred):
-        # y_pred : [slope/FVC_pred, s/sigma, FVC_start, weeks_from_start]
-        y_true = tf.dtypes.cast(y_true, tf.float32)
-        y_pred = tf.dtypes.cast(y_pred, tf.float32)
-        
-        if(predict_slope):
-            s = y_pred[:,1]
-            weeks_from_start = y_true[:,1]
-            sigma = s * weeks_from_start
-        else:
-            sigma = y_pred[:,1]
-            if output_normalization:
-                sigma *= 500
-        
-        sigma_clip = tf.maximum(tf.abs(sigma), 70)
-        
-        sq2 = tf.sqrt(tf.dtypes.cast(2, dtype=tf.float32))
-        loss = tf.math.log(sigma_clip * sq2)
-        return K.mean(loss)
-    
-    def delta_over_sigma(y_true, y_pred):
-        # y_pred : [slope/FVC_pred, s/sigma, FVC_start, weeks_from_start]
-        y_true = tf.dtypes.cast(y_true, tf.float32)
-        y_pred = tf.dtypes.cast(y_pred, tf.float32)
-        FVC_true = y_true[:,0]
-        
-        if(predict_slope):
-            slope = y_pred[:,0]
-            s = y_pred[:,1]
-            weeks_from_start = y_true[:,1]
-            FVC_start = y_true[:,2]
-            
-            sigma = s * weeks_from_start
-            # Kan probleem worden by ReLu omdat slope negatief wordt door minimalisering Loss
-            FVC_pred = weeks_from_start * slope + FVC_start
-        else:
-            FVC_pred = tf.abs(y_pred[:,0])
-            sigma = tf.abs(y_pred[:,1])
-            if output_normalization:
-                FVC_pred *= 5000
-                sigma *= 500
-        
-        ## ** Hier kan een fout komen doordat de afgeleide moeilijker te berekenen is
-        sigma_clip = tf.maximum(tf.abs(sigma), 70)
-        delta = tf.abs(FVC_true - FVC_pred)
-        delta = tf.minimum(delta, 1000)
-        ## **
-        
-        sq2 = tf.sqrt(tf.dtypes.cast(2, dtype=tf.float32))
-        loss = (delta / sigma_clip)*sq2
-        return K.mean(loss)
-    
-    def Laplace_log_likelihood(y_true, y_pred):
-        # y_pred : [slope/FVC_pred, s/sigma, FVC_start, weeks_from_start]
-        y_true = tf.dtypes.cast(y_true, tf.float32)
-        y_pred = tf.dtypes.cast(y_pred, tf.float32)
-        FVC_true = y_true[:,0]
-        
-        if predict_slope:
-            slope = y_pred[:,0]
-            s = y_pred[:,1]
-
-            weeks_from_start = y_true[:,1]
-            FVC_start = y_true[:,2]
-            
-            sigma = s * weeks_from_start
-            # Kan probleem worden by ReLu omdat slope negatief wordt door minimalisering Loss
-            FVC_pred = weeks_from_start * slope + FVC_start
-        else:
-            FVC_pred = tf.abs(y_pred[:,0])
-            sigma = tf.abs(y_pred[:,1])
-            if output_normalization:
-                FVC_pred *= 5000
-                sigma *= 500
-        
-        ## ** Hier kan een fout komen doordat de afgeleide moeilijker te berekenen is
-        delta = tf.abs(FVC_true - FVC_pred)
-        ## **
-        
-        sq2 = tf.sqrt(tf.dtypes.cast(2, dtype=tf.float32))
-        loss = (delta / sigma)*sq2 + tf.math.log(sigma * sq2)
-        return K.mean(loss)
-    
-    def Laplace_metric(y_true, y_pred):
-        # y_pred : [slope/FVC_pred, s/sigma, FVC_start, weeks_from_start]
-        y_true = tf.dtypes.cast(y_true, tf.float32)
-        y_pred = tf.dtypes.cast(y_pred, tf.float32)
-        FVC_true = y_true[:,0]
-        
-        if predict_slope:
-            slope = y_pred[:,0]
-            s = y_pred[:,1]
-
-            weeks_from_start = y_true[:,1]
-            FVC_start = y_true[:,2]
-            
-            sigma = s * weeks_from_start
-            # Kan probleem worden by ReLu omdat slope negatief wordt door minimalisering Loss
-            FVC_pred = weeks_from_start * slope + FVC_start
-        else:
-            FVC_pred = tf.abs(y_pred[:,0])
-            sigma = tf.abs(y_pred[:,1])
-            if output_normalization:
-                FVC_pred *= 5000
-                sigma *= 500
-        
-        ## ** Hier kan een fout komen doordat de afgeleide moeilijker te berekenen is
-        sigma_clip = tf.maximum(tf.abs(sigma), 70)
-        delta = tf.abs(FVC_true - FVC_pred)
-        delta = tf.minimum(delta, 1000)
-        ## **
-        
-        sq2 = tf.sqrt(tf.dtypes.cast(2, dtype=tf.float32))
-        loss = (delta / sigma_clip)*sq2 + tf.math.log(sigma_clip * sq2)
-        return K.mean(loss)
-    
-    
     model = tf.keras.Model(inputs = inputs, outputs = outputs)    
     opt = tf.keras.optimizers.Adam()
-    model.compile(optimizer=opt, loss=Laplace_log_likelihood,
-                  metrics = [Laplace_metric, sigma_cost, delta_over_sigma, absolute_delta_error])
+    if modified_loss:
+        model.compile(optimizer=opt, loss=experimental_loss_function,
+                      metrics = [Laplace_metric, sigma_cost, delta_over_sigma, absolute_delta_error])
+    else:
+        model.compile(optimizer=opt, loss=Laplace_log_likelihood,
+                      metrics = [Laplace_metric, sigma_cost, delta_over_sigma, absolute_delta_error])
     
     return model
 
@@ -336,4 +234,134 @@ def get_fold_indices(folds, train):
             fold_pos.append(np.max(np.where(train["Patient"] == i))+1)
             
     return fold_pos
+
+class DataGenerator(keras.utils.Sequence):
+    def __init__(self, list_IDs, config, validation = False, number_of_labels = 3,
+                 batch_size = 128, shuffle = True):
+        self.number_features = int(config["NUMBER_FEATURES"])
+        self.validation = validation
+        self.gauss_std = config["VALUE_GAUSSIAN_NOISE_ON_FVC"]
+        self.list_IDs = list_IDs
+        self.batch_size = config["BATCH_SIZE"]
+        self.shuffle = shuffle
+        self.on_epoch_end()
+        self.label_size = number_of_labels
+        self.normalized = config["INPUT_NORMALIZATION"]
+        self.correlated = config["GAUSSIAN_NOISE_CORRELATED"]
+    
+    def __len__(self):
+        return int(np.floor(len(self.list_IDs)/self.batch_size))
+    
+    def __getitem__(self, index):
+        'Generate one batch of data'
+        # Generate indexes of the batch
+        indexes = self.indexes[index*self.batch_size:(index+1)*self.batch_size]
+        list_IDs_temp = [self.list_IDs[k] for k in indexes]
+        # Generate data
+        X, y = self.__data_generation(list_IDs_temp)
+        return X, y
+
+    def on_epoch_end(self):
+        'Updates indexes after each epoch'
+        self.indexes = np.arange(len(self.list_IDs))
+        if self.shuffle == True:
+            np.random.shuffle(self.indexes)
+
+    def __data_generation(self, list_IDs_temp):
+        'Generates data containing batch_size samples' # X : (n_samples, *dim, n_channels)
+        # Initialization
+        X = np.empty((self.batch_size, self.number_features))
+        y = np.empty((self.batch_size, self.label_size), dtype=int)
+        
+        data = np.load("./train_data.npy", allow_pickle = True)
+        lab = np.load("./train_labels.npy", allow_pickle = True)
+        
+        for i, ID in enumerate(list_IDs_temp):
+            X[i,] = np.asarray(data[ID], dtype = "float32")
+            y[i,] = np.asarray(lab[ID], dtype = "float32")
+        y = np.asarray(y,dtype = "float32")
+        
+        if not self.validation:
+            gauss_X = np.random.normal(0, self.gauss_std, size = self.batch_size)
+
+            if self.correlated:
+                gauss_y = gauss_X
+            else:
+                gauss_y = np.random.normal(0, self.gauss_std, size = self.batch_size)
+            if self.normalized:
+                gauss_X = gauss_X/5000 
+
+            X[:,2] += gauss_X.astype("float32")*X[:,2]/X[:,1]
+            X[:,1] += gauss_X.astype("float32")
+            y[:,2] += gauss_X.astype("float32")
+            y[:,0] += gauss_y.astype("float32")
+        
+        return X, y
+
+def absolute_delta_error(y_true, y_pred):
+
+    FVC_true = y_true[:,0]
+    FVC_pred = tf.abs(y_pred[:,0])
+
+    return K.mean(tf.abs(FVC_true - FVC_pred))
+
+def sigma_cost(y_true, y_pred):
+
+    sigma_clip = tf.maximum(tf.abs(y_pred[:,1]), 70)
+
+    loss = tf.math.log(tf.maximum(tf.abs(y_pred[:,1]), 70) * SQRT2)
+
+    return K.mean(loss)
+
+def delta_over_sigma(y_true, y_pred):
+
+    FVC_true = y_true[:,0]
+    FVC_pred = tf.abs(y_pred[:,0])
+    sigma = tf.abs(y_pred[:,1])
+
+    sigma_clip = tf.maximum(tf.abs(sigma), 70)
+    delta = tf.abs(FVC_true - FVC_pred)
+    delta = tf.minimum(delta, 1000)
+
+    loss = (delta / sigma_clip)*SQRT2
+
+    return K.mean(loss)
+
+def Laplace_metric(y_true, y_pred):
+
+    FVC_true = y_true[:,0]
+    FVC_pred = tf.abs(y_pred[:,0])
+
+    sigma_clip = tf.maximum(tf.abs(y_pred[:,1]), 70)
+    delta = tf.abs(FVC_true - FVC_pred)
+    delta = tf.minimum(delta, 1000)
+
+    loss = (delta / sigma_clip)*SQRT2 + tf.math.log(sigma_clip * SQRT2)
+    return K.mean(loss)
+
+def Laplace_log_likelihood(y_true, y_pred):
+
+    FVC_true = y_true[:,0]
+    FVC_pred = tf.abs(y_pred[:,0])
+
+    ## ** Hier kan een fout komen doordat de afgeleide moeilijker te berekenen is
+    sigma = tf.maximum(tf.abs(y_pred[:,1]), 70)
+    delta = tf.abs(FVC_true - FVC_pred)
+    ## **
+
+    loss = (delta / sigma)*SQRT2 + tf.math.log(sigma * SQRT2)
+    return K.mean(loss)
+
+def experimental_loss_function(y_true, y_pred):
+
+    FVC_true = y_true[:,0]
+    FVC_pred = tf.abs(y_pred[:,0])
+
+    ## ** Hier kan een fout komen doordat de afgeleide moeilijker te berekenen is
+    sigma = tf.maximum(tf.abs(y_pred[:,1]), 70)
+    delta = tf.abs(FVC_true - FVC_pred)
+    ## **
+
+    loss = (delta / 70)*SQRT2 + (delta / sigma)*SQRT2 + tf.math.log(sigma * SQRT2)
+    return K.mean(loss)
 
