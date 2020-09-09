@@ -207,6 +207,69 @@ def build_model(config):
     
     return model
 
+class DataGenerator(keras.utils.Sequence):
+    def __init__(self, list_IDs, config, validation = False, number_of_labels = 3,
+                 batch_size = 128, shuffle = True):
+        self.number_features = int(config["NUMBER_FEATURES"])
+        self.validation = validation
+        self.gauss_std = config["VALUE_GAUSSIAN_NOISE_ON_FVC"]
+        self.list_IDs = list_IDs
+        self.batch_size = config["BATCH_SIZE"]
+        self.labels = labels
+        self.shuffle = shuffle
+        self.on_epoch_end()
+        self.label_size = number_of_labels
+        self.normalized = config["INPUT_NORMALIZATION"]
+        self.correlated = config["GAUSSIAN_NOISE_CORRELATED"]
+    
+    def __len__(self):
+        return int(np.floor(len(self.list_IDs)/self.batch_size))
+    
+    def __getitem__(self, index):
+        'Generate one batch of data'
+        # Generate indexes of the batch
+        indexes = self.indexes[index*self.batch_size:(index+1)*self.batch_size]
+        list_IDs_temp = [self.list_IDs[k] for k in indexes]
+        # Generate data
+        X, y = self.__data_generation(list_IDs_temp)
+        return X, y
+
+    def on_epoch_end(self):
+        'Updates indexes after each epoch'
+        self.indexes = np.arange(len(self.list_IDs))
+        if self.shuffle == True:
+            np.random.shuffle(self.indexes)
+
+    def __data_generation(self, list_IDs_temp):
+        'Generates data containing batch_size samples' # X : (n_samples, *dim, n_channels)
+        # Initialization
+        X = np.empty((self.batch_size, self.number_features))
+        y = np.empty((self.batch_size, self.label_size), dtype=int)
+        
+        data = np.load("./train_data.npy", allow_pickle = True)
+        lab = np.load("./train_labels.npy", allow_pickle = True)
+        
+        for i, ID in enumerate(list_IDs_temp):
+            X[i,] = np.asarray(data[ID], dtype = "float32")
+            y[i,] = np.asarray(lab[ID], dtype = "float32")
+        y = np.asarray(y,dtype = "float32")
+        
+        if not self.validation:
+            gauss_X = np.random.normal(0, self.gauss_std, size = self.batch_size)
+
+            if self.correlated:
+                gauss_y = gauss_X
+            else:
+                gauss_y = np.random.normal(0, self.gauss_std, size = self.batch_size)
+            if self.normalized:
+                gauss_X = gauss_X/5000 
+
+            X[:,2] += gauss_X.astype("float32")*X[:,2]/X[:,1]
+            X[:,1] += gauss_X.astype("float32")
+            y[:,2] += gauss_X.astype("float32")
+            y[:,0] += gauss_y.astype("float32")
+        
+        return X, y
 
 def get_cosine_annealing_lr_callback(lr_max=1e-4, n_epochs= 10000, n_cycles= 10):
     epochs_per_cycle = np.floor(n_epochs / n_cycles)
