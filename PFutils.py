@@ -231,14 +231,13 @@ def get_fold_indices(folds, train):
     return fold_pos
 
 class DataGenerator(keras.utils.Sequence):
-    def __init__(self, list_IDs, config, labels, validation = False, number_of_labels = 3,
+    def __init__(self, list_IDs, config, validation = False, number_of_labels = 3,
                  batch_size = 128, shuffle = True):
         self.number_features = int(config["NUMBER_FEATURES"])
         self.validation = validation
         self.gauss_std = config["VALUE_GAUSSIAN_NOISE_ON_FVC"]
         self.list_IDs = list_IDs
         self.batch_size = config["BATCH_SIZE"]
-        self.labels = labels
         self.shuffle = shuffle
         self.on_epoch_end()
         self.label_size = number_of_labels
