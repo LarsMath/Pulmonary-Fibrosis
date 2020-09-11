@@ -255,7 +255,8 @@ class DataGenerator(keras.utils.Sequence):
                  batch_size = 128, shuffle = True):
         self.number_features = int(config["NUMBER_FEATURES"])
         self.validation = validation
-        self.gauss_std = config["VALUE_GAUSSIAN_NOISE_ON_FVC"]
+        self.gauss_fvc = config["VALUE_GAUSSIAN_NOISE_ON_FVC"]
+        self.gauss_meta = config["VALUE_GAUSSIAN_NOISE_ON_META"]
         self.list_IDs = list_IDs
         self.batch_size = config["BATCH_SIZE"]
         self.shuffle = shuffle
@@ -263,6 +264,8 @@ class DataGenerator(keras.utils.Sequence):
         self.label_size = number_of_labels
         self.normalized = config["INPUT_NORMALIZATION"]
         self.correlated = config["GAUSSIAN_NOISE_CORRELATED"]
+        if validation:
+            self.batch_size = len(self.list_IDs)
     
     def __len__(self):
         return int(np.floor(len(self.list_IDs)/self.batch_size))
@@ -297,17 +300,19 @@ class DataGenerator(keras.utils.Sequence):
         y = np.asarray(y,dtype = "float32")
         
         if not self.validation:
-            gauss_X = np.random.normal(0, self.gauss_std, size = self.batch_size)
+            gauss_X = np.random.normal(0, self.gauss_fvc, size = self.batch_size)
+            gauss_meta = np.random.normal(0, self.gauss_meta, size = (self.batch_size, 5))
 
             if self.correlated:
                 gauss_y = gauss_X
             else:
-                gauss_y = np.random.normal(0, self.gauss_std, size = self.batch_size)
+                gauss_y = np.random.normal(0, self.gauss_fvc, size = self.batch_size)
             if self.normalized:
                 gauss_X = gauss_X/5000 
 
             X[:,2] += gauss_X.astype("float32")*X[:,2]/X[:,1]
             X[:,1] += gauss_X.astype("float32")
+            X[:,3:8] += gauss_meta.astype("float32")
             y[:,2] += gauss_X.astype("float32")
             y[:,0] += gauss_y.astype("float32")
         
