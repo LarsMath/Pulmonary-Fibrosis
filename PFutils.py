@@ -4,14 +4,12 @@ import tensorflow as tf
 import tensorflow.keras.backend as K
 import keras
 
-SQRT2 = tf.sqrt(tf.dtypes.cast(2, dtype=tf.float32))
-
 def get_test_data(files, input_normalization):
     test = pd.read_csv(files)
     submission = pd.DataFrame(columns=['Patient_Week', 'FVC', 'Confidence'])
 
     if input_normalization:
-        test["Age"] = test["Age"]/100
+        test["Age"] = (test["Age"]-50)/50
         test["Percent"] = test["Percent"]/100
         test["Weeks"] = test["Weeks"]/100
         test["FVC"] = test["FVC"]/5000 
@@ -87,7 +85,7 @@ def get_train_data(files, pseudo_test_patients, input_normalization, train_on_ba
     labels = labels.astype("float32")
         
     if input_normalization:
-        train["Age"] = train["Age"]/100
+        train["Age"] = (train["Age"]-50)/50
         train["Percent"] = train["Percent"]/100
         train["Weeks"] = train["Weeks"]/100
         train["Weekdiff_target"] = train["Weekdiff_target"]/100
@@ -108,7 +106,7 @@ def get_pseudo_test_data(files, pseudo_test_patients, input_normalization, rando
     df = pd.read_csv(files)
     
     if input_normalization:
-        df["Age"] = df["Age"]/100
+        df["Age"] = (df["Age"]-50)/50
         df["Percent"] = df["Percent"]/100
         df["Weeks"] = df["Weeks"]/100
         df["FVC"] = df["FVC"]/5000    
@@ -153,65 +151,6 @@ def get_pseudo_test_data(files, pseudo_test_patients, input_normalization, rando
     test_check = test_check.astype("Float32")
     
     return test_data, test_check
-
-def build_model(config):
-    size = config["NUMBER_FEATURES"]
-    actfunc = config["ACTIVATION_FUNCTION"]
-    predict_slope = config["PREDICT_SLOPE"]
-    drop_out_rate = config["DROP_OUT_RATE"]
-    l2_regularization = config["L2_REGULARIZATION"]
-    output_normalization = config["OUTPUT_NORMALIZATION"]
-    hidden_layers = config["HIDDEN_LAYERS"]
-    regularization_constant = config["REGULARIZATION_CONSTANT"]
-    drop_out_layers = config["DROP_OUT_LAYERS"]
-    modified_loss = config["MODIFIED_LOSS"]
-    
-    if actfunc == 'swish':
-        actfunc = tf.keras.activations.swish
-
-    inp = tf.keras.layers.Input(shape=(size), name = "input_features")
-    inp2 = tf.keras.layers.Input(shape=(1), name = "slope_FVC")
-    inp3 = tf.keras.layers.Input(shape=(1), name = "slope_Weekdiff")
-    
-    inputs = [inp,inp2,inp3]
-
-    x = inp
-    
-    for j,n_neurons in enumerate(hidden_layers):
-        if l2_regularization:
-            x = tf.keras.layers.Dense(n_neurons, activation=actfunc,
-                                      kernel_regularizer = tf.keras.regularizers.l2(regularization_constant))(x)
-        else:
-            x = tf.keras.layers.Dense(n_neurons, activation=actfunc)(x)
-        if j in drop_out_layers:
-            x = tf.keras.layers.Dropout(drop_out_rate)(x)
-    
-    FVC_output = tf.keras.layers.Dense(1, name = "FVC_output")(x)
-    sigma_output = tf.keras.layers.Dense(1, name = "sigma_output")(x)
-    
-    if output_normalization:
-        FVC_output = tf.math.scalar_mul(tf.constant(50,dtype = 'float32'), FVC_output)
-        sigma_output = tf.math.scalar_mul(tf.constant(5,dtype = 'float32'), sigma_output)
-        if not predict_slope:
-            FVC_output = tf.math.scalar_mul(tf.constant(100,dtype = 'float32'), FVC_output)
-            sigma_output = tf.math.scalar_mul(tf.constant(100,dtype = 'float32'), sigma_output)
-
-    if predict_slope:
-        FVC_output = tf.add(tf.keras.layers.multiply([FVC_output, inp2]),inp3)
-        sigma_output = tf.keras.layers.multiply([sigma_output, inp2])
-        
-    outputs = tf.keras.layers.concatenate([FVC_output,sigma_output])
-
-    model = tf.keras.Model(inputs = inputs, outputs = outputs)    
-    opt = tf.keras.optimizers.Adam()
-    if modified_loss:
-        model.compile(optimizer=opt, loss=experimental_loss_function,
-                      metrics = [Laplace_metric, sigma_cost, delta_over_sigma, absolute_delta_error])
-    else:
-        model.compile(optimizer=opt, loss=Laplace_log_likelihood,
-                      metrics = [Laplace_metric, sigma_cost, delta_over_sigma, absolute_delta_error])
-    
-    return model
 
 def get_cosine_annealing_lr_callback(config):
     n_epochs = config["EPOCHS"]
@@ -317,6 +256,69 @@ class DataGenerator(keras.utils.Sequence):
             y[:,0] += gauss_y.astype("float32")
         
         return X, y
+    
+SQRT2 = tf.sqrt(tf.dtypes.cast(2, dtype=tf.float32))
+
+def build_model(config):
+    size = config["NUMBER_FEATURES"]
+    actfunc = config["ACTIVATION_FUNCTION"]
+    predict_slope = config["PREDICT_SLOPE"]
+    drop_out_rate = config["DROP_OUT_RATE"]
+    l2_regularization = config["L2_REGULARIZATION"]
+    output_normalization = config["OUTPUT_NORMALIZATION"]
+    hidden_layers = config["HIDDEN_LAYERS"]
+    regularization_constant = config["REGULARIZATION_CONSTANT"]
+    drop_out_layers = config["DROP_OUT_LAYERS"]
+    loss_modification = config["LOSS_MODIFICATION"]
+    optimal_sigma_loss = config["OPTIMAL_SIGMA_LOSS"]
+    
+    if actfunc == 'swish':
+        actfunc = tf.keras.activations.swish
+
+    inp = tf.keras.layers.Input(shape=(size), name = "input_features")
+    inp2 = tf.keras.layers.Input(shape=(1), name = "slope_FVC")
+    inp3 = tf.keras.layers.Input(shape=(1), name = "slope_Weekdiff")
+    
+    inputs = [inp,inp2,inp3]
+
+    x = inp
+    
+    for j,n_neurons in enumerate(hidden_layers):
+        if l2_regularization:
+            x = tf.keras.layers.Dense(n_neurons, activation=actfunc,
+                                      kernel_regularizer = tf.keras.regularizers.l2(regularization_constant))(x)
+        else:
+            x = tf.keras.layers.Dense(n_neurons, activation=actfunc)(x)
+        if j in drop_out_layers:
+            x = tf.keras.layers.Dropout(drop_out_rate)(x)
+    
+    FVC_output = tf.keras.layers.Dense(1, name = "FVC_output")(x)
+    sigma_output = tf.keras.layers.Dense(1, name = "sigma_output")(x)
+    
+    if output_normalization:
+        FVC_output = tf.math.scalar_mul(tf.constant(50,dtype = 'float32'), FVC_output)
+        sigma_output = tf.math.scalar_mul(tf.constant(5,dtype = 'float32'), sigma_output)
+        if not predict_slope:
+            FVC_output = tf.math.scalar_mul(tf.constant(100,dtype = 'float32'), FVC_output)
+            sigma_output = tf.math.scalar_mul(tf.constant(100,dtype = 'float32'), sigma_output)
+
+    if predict_slope:
+        FVC_output = tf.add(tf.keras.layers.multiply([FVC_output, inp2]),inp3)
+        sigma_output = tf.keras.layers.multiply([sigma_output, inp2])
+        
+    outputs = tf.keras.layers.concatenate([FVC_output,sigma_output])
+
+    model = tf.keras.Model(inputs = inputs, outputs = outputs)    
+    opt = tf.keras.optimizers.Adam()
+    if optimal_sigma_loss:
+        model.compile(optimizer=opt, loss=optimal_sigma_loss_function,
+                      metrics = [Laplace_metric, sigma_cost, delta_over_sigma, absolute_delta_error])
+    else:
+        model.compile(optimizer=opt, loss=(lambda x,y:(Laplace_log_likelihood(x,y) + absolute_delta_error(x,y)*loss_modification*SQRT2/70)),
+                      metrics = [Laplace_metric, sigma_cost, delta_over_sigma, absolute_delta_error])
+    
+    return model
+    
 def absolute_delta_error(y_true, y_pred):
 
     FVC_true = y_true[:,0]
@@ -371,6 +373,17 @@ def Laplace_log_likelihood(y_true, y_pred):
     loss = (delta / sigma)*SQRT2 + tf.math.log(sigma * SQRT2)
     return K.mean(loss)
 
+def optimal_sigma_loss_function(y_true, y_pred):
+
+    FVC_true = y_true[:,0]
+    FVC_pred = tf.abs(y_pred[:,0])
+    
+    delta = tf.abs(FVC_true - FVC_pred)
+    sigma = tf.maximum(SQRT2*delta, 70)
+
+    loss = (delta / sigma)*SQRT2 + tf.math.log(sigma * SQRT2)
+    return K.mean(loss)
+
 def experimental_loss_function(y_true, y_pred):
 
     FVC_true = y_true[:,0]
@@ -383,4 +396,3 @@ def experimental_loss_function(y_true, y_pred):
 
     loss = (delta / 70)*SQRT2 + (delta / sigma)*SQRT2 + tf.math.log(sigma * SQRT2)
     return K.mean(loss)
-
