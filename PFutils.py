@@ -252,8 +252,6 @@ class DataGenerator(keras.utils.Sequence):
             gaussian_noise = np.empty((self.batch_size, self.number_features))
             for i, sigma in enumerate(self.noise_SDs):
                 gaussian_noise[:,i] = np.random.normal(0, sigma, size = self.batch_size)
-                
-            gaussian_noise[:,8] = gaussian_noise[:,0]
 
             if self.correlated:
                 gauss_y = gaussian_noise[:,1].copy()
