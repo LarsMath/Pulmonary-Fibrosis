@@ -1,3 +1,4 @@
+# %% [code]
 import numpy as np
 import pandas as pd
 import tensorflow as tf
@@ -201,7 +202,8 @@ class DataGenerator(keras.utils.Sequence):
         self.on_epoch_end()
         self.label_size = number_of_labels
         self.normalized = config["INPUT_NORMALIZATION"]
-        self.correlated = config["GAUSSIAN_NOISE_CORRELATED"]
+        self.correlated = config["GAUSSIAN_NOISE_FVC_CORRELATED"]
+        self.percentcorrelated = config["ADD_NOISE_FVC_TO_PERCENT"]
         if validation:
             self.batch_size = len(self.list_IDs)
     
@@ -245,13 +247,15 @@ class DataGenerator(keras.utils.Sequence):
             gaussian_noise[:,8] = gaussian_noise[:,0]
 
             if self.correlated:
-                gauss_y = gaussian_noise[:,1]
+                gauss_y = gaussian_noise[:,1].copy()
             else:
                 gauss_y = np.random.normal(0, self.noise_SDs[1], size = self.batch_size)
             if self.normalized:
                 gaussian_noise[:,1] = gaussian_noise[:,1]/5000
 
-            X += gaussian_noise         
+            X += gaussian_noise.astype("float32")
+            if self.percentcorrelated:
+                X[:,2] += gaussian_noise[:,1].astype("float32")*X[:,2]/X[:,1]
             y[:,2] += gaussian_noise[:,1].astype("float32")
             y[:,0] += gauss_y.astype("float32")
         
@@ -274,6 +278,8 @@ def build_model(config):
     
     if actfunc == 'swish':
         actfunc = tf.keras.activations.swish
+    if actfunc == 'leakyrelu':
+        actfunc = tf.keras.activations.LeakyReLU
 
     inp = tf.keras.layers.Input(shape=(size), name = "input_features")
     inp2 = tf.keras.layers.Input(shape=(1), name = "slope_FVC")
