@@ -56,7 +56,7 @@ def get_test_data(files, input_normalization):
     
     return test_data, submission
 
-def get_train_data(files, pseudo_test_patients, input_normalization, train_on_backward_weeks):
+def get_train_data(files, pseudo_test_patients, input_normalization, train_on_backward_weeks, negative_normalization = False):
     df = pd.read_csv(files)
     patients = []
     for patient in df.Patient.unique()[pseudo_test_patients:]:
@@ -92,12 +92,21 @@ def get_train_data(files, pseudo_test_patients, input_normalization, train_on_ba
         train["Weekdiff_target"] = train["Weekdiff_target"]/100
         train["FVC"] = train["FVC"]/5000 
     
+    if negative_normalization:
+        train["Age"] = train["Age"]*2-1
+        train["Percent"] = train["Percent"]*2-1
+        train["Weeks"] = train["Weeks"]*2-1
+        train["Weekdiff_target"] = train["Weekdiff_target"]*2-1
+        train["FVC"] = train["FVC"]*2-1
+    
     train = train[["Weeks", "FVC", "Percent", "Age", "Sex", "Currently smokes",
                    "Ex-smoker", "Never smoked", "Weekdiff_target", "Patient"]]
 
     data = {"input_features": train[["Weeks", "FVC", "Percent", "Age", "Sex", 
                                      "Currently smokes", "Ex-smoker", "Never smoked", "Weekdiff_target"]],
             "slope_FVC": non_normalized_FVC, "slope_Weekdiff": non_normalized_Weekdiff}
+    
+    
     
     return train, data, labels
 
