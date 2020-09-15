@@ -288,7 +288,7 @@ def build_model(config):
     if actfunc == 'swish':
         actfunc = tf.keras.activations.swish
     if actfunc == 'leakyrelu':
-        actfunc = tf.keras.activations.LeakyReLU
+        actfunc = lambda x: tf.keras.activations.relu(x, alpha=0.3)
 
     inp = tf.keras.layers.Input(shape=(size), name = "input_features")
     inp2 = tf.keras.layers.Input(shape=(1), name = "slope_FVC")
