@@ -44,7 +44,7 @@ def get_test_data(files):
             test_data.loc[count, 'Age'] = test[test["Patient"] == patient]['Age'].values[0]
     
     test_data["PatientIndex"] = 0
-    test_data["Weektarget"] = 0
+    test_data["Weektarget"] = test_data["Weekdiff_target"] + test_data["Weeks"]
     test_data["Sex"] = (test_data['Sex']=="Male").astype(int)
     test_data = pd.concat([test_data,pd.get_dummies(test_data['SmokingStatus'])],axis = 1).reset_index(drop = True)
     test_data = test_data.drop(["SmokingStatus", "Patient_Week"],axis = 1)
