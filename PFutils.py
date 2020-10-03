@@ -14,16 +14,10 @@ from skimage import morphology
 from skimage import measure
 
 
-def get_test_data(files, input_normalization):
+def get_test_data(files):
     test = pd.read_csv(files)
     submission = pd.DataFrame(columns=['Patient_Week', 'FVC', 'Confidence'])
 
-    if input_normalization:
-        test["Age"] = (test["Age"]-50)/50
-        test["Percent"] = test["Percent"]/100
-        test["Weeks"] = test["Weeks"]/100
-        test["FVC"] = test["FVC"]/5000 
-    
     count = 0
     #Submission File
     for patient in test["Patient"]:
@@ -41,14 +35,16 @@ def get_test_data(files, input_normalization):
         for i in range(-12,133+1):
             count+=1
             test_data.loc[count, "Patient_Week"] = patient + "_" + str(i)
-            test_data.loc[count, "Weekdiff_target"] = i/100 - test[test["Patient"] == patient]["Weeks"].values[0] 
+            test_data.loc[count, "Weekdiff_target"] = i - test[test["Patient"] == patient]["Weeks"].values[0] 
             test_data.loc[count, "Weeks"] = test[test["Patient"] == patient]["Weeks"].values[0]
             test_data.loc[count, "FVC"] = test[test["Patient"] == patient]["FVC"].values[0]
             test_data.loc[count, "Percent"] = test[test["Patient"] == patient]["Percent"].values[0]
             test_data.loc[count, "Sex"] = test[test["Patient"] == patient]["Sex"].values[0]
             test_data.loc[count, 'SmokingStatus'] = test[test["Patient"] == patient]['SmokingStatus'].values[0]
             test_data.loc[count, 'Age'] = test[test["Patient"] == patient]['Age'].values[0]
-
+    
+    test_data["PatientIndex"] = 0
+    test_data["Weektarget"] = 0
     test_data["Sex"] = (test_data['Sex']=="Male").astype(int)
     test_data = pd.concat([test_data,pd.get_dummies(test_data['SmokingStatus'])],axis = 1).reset_index(drop = True)
     test_data = test_data.drop(["SmokingStatus", "Patient_Week"],axis = 1)
@@ -59,8 +55,12 @@ def get_test_data(files, input_normalization):
         if col not in test_data.columns:
             test_data[col] = 0
 
-    test_data = test_data[["Weeks", "FVC", "Percent", "Age", "Sex", "Currently smokes",
-               "Ex-smoker", "Never smoked", "Weekdiff_target"]]
+    test_data = test_data[["Weeks", "Weektarget", "Weekdiff_target", "FVC", "Percent", "Age", "Sex", 
+                           "Currently smokes", "Ex-smoker", "Never smoked","PatientIndex"]]
+    
+    test_data.columns = ["WeekInit", "WeekTarget", "WeekDiff", "FVC", "Percent", "Age", "Sex", 
+                           "Currently smokes", "Ex-smoker", "Never smoked","PatientIndex"]
+    
     test_data = test_data.astype("Float32")
     
     return test_data, submission
