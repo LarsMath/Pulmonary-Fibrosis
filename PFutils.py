@@ -13,7 +13,6 @@ from sklearn.cluster import KMeans
 from skimage import morphology
 from skimage import measure
 
-
 def get_test_data(files):
     test = pd.read_csv(files)
     submission = pd.DataFrame(columns=['Patient_Week', 'FVC', 'Confidence'])
@@ -43,7 +42,6 @@ def get_test_data(files):
             test_data.loc[count, 'SmokingStatus'] = test[test["Patient"] == patient]['SmokingStatus'].values[0]
             test_data.loc[count, 'Age'] = test[test["Patient"] == patient]['Age'].values[0]
     
-    test_data["PatientIndex"] = 0
     test_data["Weektarget"] = test_data["Weekdiff_target"] + test_data["Weeks"]
     test_data["Sex"] = (test_data['Sex']=="Male").astype(int)
     test_data = pd.concat([test_data,pd.get_dummies(test_data['SmokingStatus'])],axis = 1).reset_index(drop = True)
@@ -56,14 +54,49 @@ def get_test_data(files):
             test_data[col] = 0
 
     test_data = test_data[["Weeks", "Weektarget", "Weekdiff_target", "FVC", "Percent", "Age", "Sex", 
-                           "Currently smokes", "Ex-smoker", "Never smoked","PatientIndex"]]
+                           "Currently smokes", "Ex-smoker", "Never smoked"]]
     
     test_data.columns = ["WeekInit", "WeekTarget", "WeekDiff", "FVC", "Percent", "Age", "Sex", 
-                           "Currently smokes", "Ex-smoker", "Never smoked","PatientIndex"]
+                           "Currently smokes", "Ex-smoker", "Never smoked"]
     
     test_data = test_data.astype("Float32")
     
     return test_data, submission
+
+def TTA_on_test(test_data, config):
+    
+    TTA_steps = config["TTA_STEPS"]
+    multiplier = config["TTA_MULTIPLIER"]
+    noise_SDs = config["NOISE_SDS"]
+    input_normalization = config["INPUT_NORMALIZATION"]
+    negative_normalization = config["NEGATIVE_NORMALIZATION"]
+    percent_correlated = config["ADD_NOISE_FVC_TO_PERCENT"]
+
+    batch_size, number_features = test_data.shape
+
+    X = test_data.reshape(batch_size, number_features, 1)
+    gaussian_noise = np.zeros((batch_size, number_features, TTA_steps))
+    for i, sigma in enumerate(noise_SDs):
+        gaussian_noise[:,i,:] = np.random.normal(0, multiplier * sigma, size = (batch_size, TTA_steps))
+
+    X = X + gaussian_noise
+
+    # Index 3 represents FVC, index 4 represents Percent
+    if percent_correlated:
+        X[:,4,:] += gaussian_noise[:,3,:].astype("float32")*X[:,4,:]/X[:,3,:]
+
+    if input_normalization:
+        X[:,0:2,:] = X[:,0:2,:]/100 #Weeks
+        X[:,3,:] = X[:,3,:]/5000    #FVC
+        X[:,4,:] = X[:,4,:]/100     #Percent
+        X[:,5,:] = (X[:,5,:]-50)/50 #Age
+
+    if negative_normalization:
+        X = X * 2 - 1
+
+    tta_test_data = X
+
+    return tta_test_data
 
 def get_train_data(files, pseudo_test_patients, train_on_backward_weeks, apply_lungmask, dim):
     df = pd.read_csv(files)
@@ -114,17 +147,10 @@ def get_pseudo_test_data(files, pseudo_test_patients, input_normalization, rando
     np.random.seed(random_seed)
     
     df = pd.read_csv(files)
-    
-    if input_normalization:
-        df["Age"] = (df["Age"]-50)/50
-        df["Percent"] = df["Percent"]/100
-        df["Weeks"] = df["Weeks"]/100
-        df["FVC"] = df["FVC"]/5000    
-    
+
     patients = df.Patient.unique()[:pseudo_test_patients]
 
-    test_data = pd.DataFrame(columns = ["Weeks", "FVC", "Percent", "Age", "Sex", 
-                                        "Weekdiff_target", 'SmokingStatus'])
+    test_data = pd.DataFrame()
     test_check = pd.DataFrame(columns = ["TargetFVC","Weekdiff_target","FVC"])
 
     count = 0
@@ -141,10 +167,11 @@ def get_pseudo_test_data(files, pseudo_test_patients, input_normalization, rando
             test_data.loc[count, "Sex"] = basecase["Sex"]
             test_data.loc[count, 'SmokingStatus'] = basecase['SmokingStatus']
             test_data.loc[count, 'Age'] = basecase['Age']
-            test_check.loc[count, "TargetFVC"] = testcase[1]["FVC"]*5000
-            test_check.loc[count, "Weekdiff_target"] = (testcase[1]["Weeks"] - basecase["Weeks"])*100
-            test_check.loc[count, "FVC"] = basecase["FVC"]*5000
-
+            test_check.loc[count, "TargetFVC"] = testcase[1]["FVC"]
+            test_check.loc[count, "Weekdiff_target"] = testcase[1]["Weeks"] - basecase["Weeks"]
+            test_check.loc[count, "FVC"] = basecase["FVC"]
+    
+    test_data["Weektarget"] = test_data["Weekdiff_target"] + test_data["Weeks"]
     test_data["Sex"] = (test_data['Sex']=="Male").astype(int)
     test_data = pd.concat([test_data,pd.get_dummies(test_data['SmokingStatus'])],axis = 1).reset_index(drop = True)
     test_data = test_data.drop(["SmokingStatus", "Patient_Week"],axis = 1)
@@ -154,8 +181,12 @@ def get_pseudo_test_data(files, pseudo_test_patients, input_normalization, rando
     for col in Check:
         if col not in test_data.columns:
             test_data[col] = 0
-    test_data = test_data[["Weeks", "FVC", "Percent", "Age", "Sex", "Currently smokes",
-                           "Ex-smoker", "Never smoked", "Weekdiff_target"]]
+
+    test_data = test_data[["Weeks", "Weektarget", "Weekdiff_target", "FVC", "Percent", "Age", "Sex", 
+                           "Currently smokes", "Ex-smoker", "Never smoked"]]
+    
+    test_data.columns = ["WeekInit", "WeekTarget", "WeekDiff", "FVC", "Percent", "Age", "Sex", 
+                           "Currently smokes", "Ex-smoker", "Never smoked"]
     
     test_data = test_data.astype("Float32")
     test_check = test_check.astype("Float32")
